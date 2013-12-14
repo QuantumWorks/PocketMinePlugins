@@ -7,9 +7,8 @@ description=Players can't harm eachother at spawn
 version=1.0
 author=wies
 class=PeacefulSpawn
-apiversion=10
+apiversion=10,11
 */
-
 
 class PeacefulSpawn implements Plugin{
 	private $api;
@@ -20,19 +19,23 @@ class PeacefulSpawn implements Plugin{
 	}
 	
 	public function init(){
-	$this->api->addHandler("player.interact", array($this, "playerhit"));
+		$this->api->addHandler('entity.health.change', array($this, 'entityHurt'));
 	}
 	
-	public function playerhit($data){
-		$target = $data["target"];
+	public function entityHurt($data){
+		$target = $data['entity'];
 		$t = new Vector2($target->x, $target->z);
 		$s = new Vector2($this->server->spawn->x, $this->server->spawn->z);
-		if($t->distance($s) <= $this->server->api->getProperty("spawn-protection")){
+		if($t->distance($s) <= $this->api->getProperty('spawn-protection')){
+			if(is_numeric($data['cause'])){
+				$e = $this->api->entity->get($data['cause']);
+				if(($e !== false) and ($e->class === ENTITY_PLAYER)){
+					$e->player->sendChat('PvP is not allowed at the spawn');
+				}
+			}
 			return false;
 		}
 	}
 	
 	public function __destruct(){}
-
 }
-?>
