@@ -51,6 +51,7 @@ class ChatControl implements Plugin{
 				time TEXT,
 				sender TEXT
 			);");
+			$this->api->schedule(20*60*10, array($this, 'removeOldMsg'), array(), true);
 		}
 		$this->db = new SQLite3(":memory:");
 		$this->db->exec("PRAGMA encoding = \"UTF-8\";");
@@ -66,6 +67,10 @@ class ChatControl implements Plugin{
 			chatgroup TEXT
 		);");
 		
+	}
+	
+	public function removeOldMsg(){
+		$this->messages->exec('DELETE FROM messages WHERE ID IN (SELECT ID FROM messages ORDER BY ID DESC LIMIT -1 OFFSET '.$this->config['SaveMessages']['AutoRemoveMessages']['MaxMessages'].')');
 	}
 	
 	public function pmCommands($cmd, $args, $issuer){
@@ -106,8 +111,8 @@ class ChatControl implements Plugin{
 				$msg = implode(' ', $args);
 				break;
 		}
-		$senderMsg = str_replace(array('%sender%', '%receiver%'), array($username, $name), $this->config['chat']['private']['sender']).$msg;
-		$receiverMsg = str_replace(array('%sender%', '%receiver%'), array($username, $name), $this->config['chat']['private']['receiver']).$msg;
+		$senderMsg = $this->messagePrepare($msg, $issuer, 'guest', 'private1'); // need to implement group checking
+		$receiverMsg = $this->messagePrepare($msg, $player, 'guest', 'private2');
 		$issuer->sendChat($senderMsg);
 		$player->sendChat($receiverMsg);
 		$stmt = $this->db->prepare("UPDATE players SET senderLastPM = :name WHERE username = :username;
@@ -337,10 +342,16 @@ class ChatControl implements Plugin{
 		}
 	}
 	
-	public function messagePrepare($msg, $player, $group, $type = 'global'){
-		$needle = array('%name%', '%map%', '%prefix%', '%suffix%');
-		$replace = array($player->username, $player->level->getName(), $this->groups[$group]['prefix'], $this->groups[$group]['suffix']);
-		$msg = str_replace($needle, $replace, $this->config['chat'][$type]).$msg;
+	public function messagePrepare($msg, $player, $group = 'guest', $type = 'global'){
+		$needle = array('%name%', '%map%', '%prefix%', '%suffix%', '%msg%', '%health%');
+		$replace = array($player->username, $player->level->getName(), $this->groups[$group]['prefix'], $this->groups[$group]['suffix'], $msg, $player->entity->getHealth());
+		if($type === 'private1'){
+			$msg = str_replace($needle, $replace, $this->config['chat']['private']['sender']);
+		}elseif($type === 'private2'){
+			$msg = str_replace($needle, $replace, $this->config['chat']['private']['receiver']);
+		}else{
+			$msg = str_replace($needle, $replace, $this->config['chat'][$type]['format']);
+		}
 		$message = $msg;
 		if($this->config['SplitLongMessages']['Enabled'] == true){
 			$length = $this->config['SplitLongMessages']['Length'];
@@ -374,7 +385,7 @@ class ChatControl implements Plugin{
 				return false;
 			}
 		}
-		$msg = $this->messagePrepare($message, $player, $group);
+		$type = 'global';
 		$blacklist = array();
 		if($this->config['PlayerCanMuteChat']['Enabled'] == true){
 			$blacklist = explode(',', $result['blacklist']);
@@ -382,11 +393,13 @@ class ChatControl implements Plugin{
 		}
 		if(isset($data['type'])){
 			if($data['type'] === 'map'){
+				$type = 'map';
 				$level = $data['level'];
 				foreach($this->api->player->getAll() as $p){
 					if($p->level->getName() === $level) $blacklist[] = $p->iusername;
 				}
 			}elseif($data['type'] === 'local'){
+				$type = 'local';
 				$level = $data['level'];
 				$radius = $data['radius'];
 				$pos = new Vector2($player->entity->x, $player->entity->z);
@@ -397,6 +410,7 @@ class ChatControl implements Plugin{
 				}
 			}
 		}
+		$msg = $this->messagePrepare($message, $player, $group, $type);
 		$this->sendMessage($msg, $blacklist);
 		$stmt = $this->db->prepare("UPDATE players SET timeLastMsg = :time AND lastMsg = :msg WHERE ID = :id;");
 		$stmt->bindValue(':time', time(), SQLITE3_NUM);
@@ -476,25 +490,27 @@ class ChatControl implements Plugin{
 				'SaveMessages' => array(
 					'Enabled' => false,
 					'AutoRemoveMessages' => array(
-						'Enabled' => false,
-						'AfterHowManyDays' => 7,
+						'Enabled' => true,
+						'MaxMessages' => 500,
 					),
 				),
 				'chat' => array(
-					'global' => '%prefix% %name% %suffix%: ',
+					'global' => array(
+						'format' => '%prefix% %name% %suffix%: %msg%',
+					),
 					'private' => array(
 						'enabled' => true,
-						'sender' => '<you -> %receiver%> ',
-						'receiver' => '<%sender% -> you> ',
+						'sender' => '<you -> %receiver%> %msg%',
+						'receiver' => '<%sender% -> you> %msg%',
 					),
 					'map' => array(
 						'enabled' => true,
-						'<%map%>%prefix% %name% %suffix%: ',
+						'format' => '<%map%>%prefix% %name% %suffix%: %msg%',
 					),
 					'local' => array(
 						'enabled' => true,
 						'radius' => 15,
-						'<local>%prefix% %name% %suffix%: ',
+						'format' => '<local>%prefix% %name% %suffix%: %msg%',
 					),
 				),
 			);
