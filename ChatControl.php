@@ -543,7 +543,6 @@ class ChatControl implements Plugin{
 		}
 		$this->config = $this->api->plugin->readYAML($this->path.'config.yml');
 		$this->groups = $this->api->plugin->readYAML($this->path.'groups.yml');
-		$this->broadcast = $this->api->plugin->readYAML($this->path.'broadcast.yml');
 		if($this->config['PlayerCanMuteChat']['Enabled'] == true){
 			$this->api->console->register('mute', 'Hide the chat', array($this, 'muteCommands'));
 			$this->api->console->register('unmute', 'Display the chat again', array($this, 'muteCommands'));
