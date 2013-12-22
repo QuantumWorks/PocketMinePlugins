@@ -7,7 +7,7 @@ description=Plugin that gives you more control over the chat on your server
 version=2.0
 author=wies
 class=ChatControl
-apiversion=10
+apiversion=11
 */
 
 /*
@@ -36,23 +36,12 @@ class ChatControl implements Plugin{
 		$this->api->addHandler('console.command.tell', array($this, 'commandTell'));
 		$this->api->console->register('cc', "ChatControl commands", array($this, 'commands'));
 		$this->api->console->register('r', 'Quickly reply the last player messaged you', array($this, 'pmCommands'));
+		$this->api->ban->cmdWhitelist('r');
 		$this->players = array();
 		$this->muted = false;
 	}
 	
 	private function loadDB(){
-		// if($this->config['SaveMessages']['Enabled'] == true){
-			// $this->messages = new SQLite3($this->path.'messages.data');
-			// $this->messages->exec("PRAGMA encoding = \"UTF-8\";");
-			// $this->messages->exec("PRAGMA secure_delete = OFF;");
-			// $this->messages->exec("CREATE TABLE IF NOT EXISTS messages(
-				// ID INTEGER PRIMARY KEY AUTOINCREMENT,
-				// msg TEXT,
-				// time TEXT,
-				// sender TEXT
-			// );");
-			// $this->api->schedule(20*60*10, array($this, 'removeOldMsg'), array(), true);
-		// }
 		$this->db = new SQLite3(":memory:");
 		$this->db->exec("PRAGMA encoding = \"UTF-8\";");
 		$this->db->exec("PRAGMA secure_delete = OFF;");
@@ -69,16 +58,9 @@ class ChatControl implements Plugin{
 		
 	}
 	
-	// public function removeOldMsg(){
-		// $this->messages->exec('DELETE FROM messages WHERE ID IN (SELECT ID FROM messages ORDER BY ID DESC LIMIT -1 OFFSET '.$this->config['SaveMessages']['AutoRemoveMessages']['MaxMessages'].')');
-	// }
-	
 	public function pmCommands($cmd, $args, $issuer){
 		if($this->config['chat']['private']['enabled'] == false){
 			return 'Private chat is disabled';
-		}
-		if(!$issuer instanceof Player){
-			return 'Run this command in-game';
 		}
 		$username = $issuer->iusername;
 		switch($cmd){
@@ -98,11 +80,13 @@ class ChatControl implements Plugin{
 				if(!isset($args[0])){
 					return 'Usage: /r <msg>';
 				}
-				$stmt = $this->db->prepare("SELECT senderLastPM FROM player WHERE username = :username;");
-				$name = $stmt->execute()->fetchArray(SQLITE3_NUM);
-				if($name === false){
+				$stmt = $this->db->prepare("SELECT senderLastPM FROM players WHERE username = :name;");
+				$stmt->bindValue(':name', $username, SQLITE3_TEXT);
+				$result = $stmt->execute();
+				if($result === ''){
 					return 'No player sent you a message';
 				}
+				$name = $result->fetchArray(SQLITE3_NUM);
 				$name = strtolower($name[0]);
 				$player = $this->api->player->get($name);
 				if($player === false){
@@ -255,7 +239,7 @@ class ChatControl implements Plugin{
 				if (!isset($args[1]) or !isset($args[2])) {
 					return '[ChatControl] Usage: /cc <prefix|suffix> <group> <text>';
 				}
-				$group = strtoupper($args[1]);
+				$group = strtolower($args[1]);
 				if(!isset($this->groups[$group])){
 					return  "[ChatControl] The group doesn't exist";
 				}
@@ -306,7 +290,7 @@ class ChatControl implements Plugin{
 	public function getMutingPlayers(){
 		$players = array();
 		$stmt = $this->db->prepare("SELECT username FROM players WHERE muting = 1;");
-		$result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+		$result = $stmt->execute();
 		while($res = $result->fetchArray(SQLITE3_NUM)){
 			$players[] = $res[0];
 		}
@@ -314,7 +298,7 @@ class ChatControl implements Plugin{
 	}
 	
 	public function serverchat($data){
-		$message = $data['message'];
+		$message = $data->get();
 		if($this->config['DisableLeaveMsg'] == true){
 			if(strpos($message, 'left the game')) return false;
 		}
@@ -380,7 +364,7 @@ class ChatControl implements Plugin{
 		$stmt = $this->db->prepare("SELECT * FROM players WHERE username = :username;");
 		$stmt->bindValue(':username', $username, SQLITE3_TEXT);
 		$result = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-		$group = $result['group'];
+		$group = $result['chatgroup'];
 		if(($this->config['ChatIntervalProtection'] == true) and ($this->groups[$group]['interval'] != 0)){
 			if(($result['timeLastMsg'] + $this->groups[$group]['interval']) > time()){
 				$player->sendChat("Don't send more than one msg in ".$this->groups[$group]['interval'].' seconds');
@@ -419,13 +403,6 @@ class ChatControl implements Plugin{
 		$stmt->bindValue(':msg', $message, SQLITE3_TEXT);
 		$stmt->bindValue(':id', $result['ID'], SQLITE3_NUM);
 		$stmt->execute();
-		// if($this->config['SaveMessages']['Enabled'] == true){
-			// $stmt = $this->messages->prepare("INSERT INTO messages (msg,time,sender) VALUES (:msg,:time,:sender)");
-			// $stmt->bindValue(':msg', $message, SQLITE3_TEXT);
-			// $stmt->bindValue(':time', time(), SQLITE3_NUM);
-			// $stmt->bindValue(':sender', $username, SQLITE3_TEXT);
-			// $stmt->execute();
-		// }
 		return false;
 	}
 	
@@ -440,7 +417,7 @@ class ChatControl implements Plugin{
 		$username = $data->iusername;
 		$group = 'guest';
 		foreach($this->groups as $key => $val){
-			if(in_array($val['players'])){
+			if($key !== 'guest' and in_array($username, $val['players'])){
 				$group = $key;
 				break;
 			}
@@ -490,16 +467,9 @@ class ChatControl implements Plugin{
 					'Enabled' => true,
 					'Length' => 20,
 				),
-				// 'SaveMessages' => array(
-					// 'Enabled' => false,
-					// 'AutoRemoveMessages' => array(
-						// 'Enabled' => true,
-						// 'MaxMessages' => 500,
-					// ),
-				// ),
 				'chat' => array(
 					'global' => array(
-						'format' => '%prefix% %name% %suffix%: %msg%',
+						'format' => '%prefix%%name%%suffix%: %msg%',
 					),
 					'private' => array(
 						'enabled' => true,
@@ -508,12 +478,12 @@ class ChatControl implements Plugin{
 					),
 					'map' => array(
 						'enabled' => true,
-						'format' => '<%map%>%prefix% %name% %suffix%: %msg%',
+						'format' => '<%map%>%prefix%%name%%suffix%: %msg%',
 					),
 					'local' => array(
 						'enabled' => true,
 						'radius' => 15,
-						'format' => '<local>%prefix% %name% %suffix%: %msg%',
+						'format' => '<local>%prefix%%name%%suffix%: %msg%',
 					),
 				),
 			);
