@@ -299,6 +299,7 @@ class ChatControl implements Plugin{
 	
 	public function serverchat($data){
 		$message = $data->get();
+		$message = $message['message'];
 		if($this->config['DisableLeaveMsg'] == true){
 			if(strpos($message, 'left the game')) return false;
 		}
