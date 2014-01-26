@@ -4,10 +4,10 @@
 __PocketMine Plugin__
 name=AutoTree
 description=Growing trees automaticly
-version=1.0
+version=1.1
 author=wies
 class=AutoTree
-apiversion=9,10
+apiversion=11,12
 */
 		
 class AutoTree implements Plugin{
@@ -17,82 +17,132 @@ class AutoTree implements Plugin{
 	}
 	
 	public function init(){
-		$this->api->console->register("autotree", "Commands for auto tree growing", array($this, "command"));
+		$this->api->console->register('autotree', 'Commands for auto tree growing', array($this, 'growTrees'));
 		$this->path = $this->api->plugin->configPath($this);
-		$this->config = new Config($this->path."config.yml", CONFIG_YAML, array(
+		$this->config = new Config($this->path.'config.yml', CONFIG_YAML, array(
 			'Interval' => false,
-			'TypeOfTree' => false,
-			'Trees' => array()
+			'BroadcastMsg' => true,
+			'Amount' => array(
+				'Oak' => 20,
+				'Spruce' => 10,
+				'Birch' => 10,
+				'Jungle' => 10
+			),
+			'Height' => array(
+				'yMin' => 50,
+				'yMax' => 80
+			),
+			'MaxTry' => 200,
+			'Levels' => array(
+				'world'
+			),
 		));
-		$this->config = $this->api->plugin->readYAML($this->path . "config.yml");
-		$this->api->addHandler("player.block.touch", array($this, "blockTouch"));
-		if($this->config['Interval'] != false){
-			$this->api->schedule(20 * $this->config['Interval'], array($this, "growTrees"), array(), true);
+		$this->config = $this->api->plugin->readYAML($this->path . 'config.yml');
+		if(file_exists($this->path.'trees.data')){
+			$this->trees = json_decode(file_get_contents($this->path.'trees.data'), true);
+		}else{
+			file_put_contents($this->path.'trees.data', json_encode(array()));
+			$this->trees = array();
 		}
-		$this->select = array();
-	}
-	
-	public function command($cmd, $args, $issuer){
-		if($issuer === 'console'){
-			$output = 'You must run this in-game';
-			return $output;
+		if(is_numeric($this->config['Interval'])){
+			$this->api->schedule(20 * 60 * $this->config['Interval'], array($this, 'growTrees'), array(), true);
 		}
-		$username = $issuer->username;
-		$output = '';
-		switch($args[0]){
-			case 'grow':	$this->growTrees();
-							break;
-			case 'select':	$this->select[$username] = true;
-							$output = '[AutoTree] You can start selecting the auto tree points with a wooden axe';
-							break;
-			case 'finish':	unset($this->select[$username]);
-							$output = '[AutoTree] Finished the selection';
-							break;
-			default:		$output = '[AutoTree] Made by Wies';
-							break;
-		}
-		return $output;
 	}
 	
 	public function growTrees(){
-		foreach((array)$this->config['Trees'] as $key => $val){
-			$level = $this->api->level->get($val['level']);
-			$x = $val['x'];
-			$y = $val['y'];
-			$z = $val['z'];
-			$position = new Vector3($x, $y, $z);
-			if($level->getBlock($position)->getID() !== 0) continue;
-			if($level->getBlock(new Vector3($x, $y + 1, $z))->getID() !== 0) continue;
-			if($level->getBlock(new Vector3($x, $y + 2, $z))->getID() !== 0) continue;
-			if($this->config['TypeOfTree'] == false){
-				$type = rand(0, 2);
-			}else{
-				$type = $val['type'];
+		foreach($this->config['Levels'] as $levelName){
+			$level = $this->api->level->get($levelName);
+			if($level === false){
+				console('[AutoTree] Level '.$levelName.' not found');
+				continue;
 			}
-			TreeObject::growTree($level, $position, new Random(), $type);
-		}
-		$this->api->chat->broadcast('[AutoTree] Trees are regenerated!');
-	}
-	
-	public function blockTouch($data){
-		if($data['item']->getID() === 271){
-			if(isset($this->select[$data['player']->username])){
-				if($this->config['TypeOfTree'] == false){
-					$type = rand(0, 2);
+			$amount = array();
+			$amount[0] = (int)$this->config['Amount']['Oak'];
+			$amount[1] = (int)$this->config['Amount']['Spruce'];
+			$amount[2] = (int)$this->config['Amount']['Birch'];
+			$amount[3] = (int)$this->config['Amount']['Jungle'];
+			$startAmount = $amount;
+			$trees = $this->trees[$levelName];
+			foreach($this->trees[$levelName] as $key => $tree){
+				$pos = new Vector3($tree[0], $tree[1], $tree[2]);
+				if($level->getBlock($pos)->getID() === 17){
+					--$amount[$tree[3]];				
 				}else{
-					$type = $this->config['TypeOfTree'];
+					$rand = new Random();
+					switch($tree[3]){
+						case 0:	$treeObj = new SmallTreeObject();
+								break;
+						case 1:	$treeObj = new SpruceTreeObject();
+								break;
+						case 2:	$treeObj = new SmallTreeObject();
+								$treeObj->type = SaplingBlock::BIRCH;
+								break;
+						case 3:	$treeObj = new SmallTreeObject();
+								$treeObj->type = SaplingBlock::JUNGLE;
+								break;
+					}
+					if($treeObj->canPlaceObject($level, $pos, $rand)){
+						$treeObj->placeObject($level, $pos, $rand);
+						--$amount[$tree[3]];
+					}else{
+						unset($trees[$key]);
+					}
 				}
-				$tree = array(
-					'x' => $data['target']->x,
-					'y' => $data['target']->y + 1,
-					'z' => $data['target']->z,
-					'level' => $data['player']->level->getName(),
-					'type' => $type
-				);
-				array_push($this->config['Trees'], $tree);
-				$this->api->plugin->writeYAML($this->path . "config.yml", $this->config);
-				$data['player']->sendChat('[AutoTree] You set a autotree on position ('.$tree['x'].','.$tree['y'].','.$tree['z'].')');
 			}
+			$this->trees[$levelName] = $trees;
+			$maxTrees = $amount[0] + $amount[1] + $amount[2] + $amount[3];
+			$maxTry = $this->config['MaxTry'];
+			$try = 0;
+			for($i=0;$i<$maxTrees and $try<$maxTry;$i++){
+				$try++;
+				$x = mt_rand(0,255);
+				$z = mt_rand(0,255);
+				$oak = $amount[0]/$startAmount[0];
+				console($oak);
+				$spruce = $amount[1]/$startAmount[1];
+				$birch = $amount[2]/$startAmount[2];
+				$jungle = $amount[3]/$startAmount[3];
+				if($oak >= $spruce and $oak >= $birch and $oak >= $jungle){
+					$type = 0;
+					$tree = new SmallTreeObject();
+				}elseif($spruce >= $birch and $spruce >= $jungle){
+					$type = 1;
+					$tree = new SpruceTreeObject();
+				}elseif($birch >= $jungle){
+					$type = 2;
+					$tree = new SmallTreeObject();
+					$tree->type = SaplingBlock::BIRCH;
+				}else{
+					$type = 3;
+					$tree = new SmallTreeObject();
+					$tree->type = SaplingBlock::JUNGLE;
+				}
+				$dirt = false;
+				$rand = new Random();
+				$yMax = $this->config['Height']['yMax'] + 1;
+				for($y = $this->config['Height']['yMin'];$y < $yMax;$y++){
+					$id = $level->getBlock(new Vector3($x, $y, $z))->getID();
+					if($id === 0 and $dirt === true){
+						$pos = new Vector3($x, $y, $z);
+						if($tree->canPlaceObject($level, $pos, $rand)){
+							$tree->placeObject($level, $pos, $rand);
+							$this->trees[$levelName][] = array($x, $y, $z, $type);
+							$amount[$type]--;
+							continue 2;;
+						}
+						$dirt = false;
+					}elseif($id === 2 or $id === 3){
+						$dirt = true;
+					}else{
+						$dirt = false;
+					}
+				}
+				$i--;
+			}
+		}
+		file_put_contents($this->path.'trees.data', json_encode($this->trees));
+		if($this->config['BroadcastMsg'] == true){
+			$this->api->chat->broadcast('Trees are regenerated!');
 		}
 	}
 	
