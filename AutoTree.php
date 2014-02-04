@@ -142,7 +142,7 @@ class AutoTree implements Plugin{
 		}
 		file_put_contents($this->path.'trees.data', json_encode($this->trees));
 		if($this->config['BroadcastMsg'] == true){
-			$this->api->chat->broadcast('Trees are regenerated!');
+			$this->api->chat->broadcast('[QN] Trees have been regenerated!');
 		}
 	}
 	
